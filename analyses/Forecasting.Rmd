@@ -64,7 +64,7 @@ ad_data_daily$day <- weekdays(ad_data_daily$date)
 # clicks
 wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$clicks, # a weekend subset
            y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$clicks) # a weekday subset
-# clonversions
+# conversions
 wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$conversions, # a weekend subset
            y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$conversions) # a weekday subset
 
