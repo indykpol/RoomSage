@@ -1,0 +1,95 @@
+---
+title: "Forecasting clicks & conversions for Google AdWords data"
+output: html_notebook
+---
+
+
+Let's import the Google Adwords data for inspection:
+```{r}
+require(readr)
+ad_data_daily <- read_csv("E:/Git/RoomSage/data/ad_data_daily.csv", 
+    col_types = cols(clicks = col_integer(), 
+        conversions = col_integer(), date = col_date(format = "%Y-%m-%d"), 
+        impressions = col_integer(), reservations = col_integer(), 
+        total_conversion_value = col_double()))
+str(ad_data_daily)
+```
+Let's summarize our data to get the feel of it:
+```{r}
+summary(ad_data_daily)
+```
+In the given dataset, we are dealing with 2 years worth of daily aggregates of impressions (views), clicks (engagements), and final purchases (conversions). Each day is further characterized using the cost of running the Ad campaign on that day, with information about the total added value from the conversions. Finally, we are informed about the average position of our Ad in the ranking of competing Ads.
+
+Let's now inspect the correlation structure in our data for any obvious patterns that will inform our modelling:
+```{r}
+correlations <- round(cor(ad_data_daily[,-1], method="spearman"), 2) # rank correlations
+
+reorder.cormat <- function(matrix){ 
+  dd <- as.dist((1-matrix)/2) # Use correlation between variables as distance
+  hc <- hclust(dd)
+  matrix <- matrix[hc$order, hc$order]
+}
+correlations <- reorder.cormat(correlations)
+# Generate the tall format for ggplotting of the lower triangle of the correlation matrix:
+require(reshape2)
+correlations[lower.tri(correlations)] <- NA
+correlations <- melt(correlations, na.rm = TRUE) # remove the NAs to avod the upper triangle
+# Heatmap
+require(ggplot2)
+ggplot(data = correlations, aes(Var2, Var1, fill = value)) + geom_tile(color = "white") + scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Spearman's\nCorrelation") + theme_bw() + theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1)) + coord_fixed() + xlab("") + ylab("") + geom_text(aes(Var2, Var1, label = value), color = "black", size = 2.5) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), panel.grid.major = element_blank(), panel.border = element_blank(), panel.background = element_blank(), axis.ticks = element_blank())
+
+```
+From the plot above, we can see that the price & reservations, as well as conversions and the total value of conversions cluster together as they are highly correlated within their pairs. Therefore, it would safest to exclude one variable from each pair to avoid problems with fitting potential models (autocorrelated variables) and to improve the model sensibility. As the price as reservations are not fully correlated (0.92 Spearman's rho), some independent signal might be extracted by including both variables.
+Also, we notice that clicks and conversions are far from being well correlated (0.17 Spearman's rho), which means the campaign is far from 
+
+Let's not examine the periodicity of the target variables, and throw in some familiar indicators such as the weekly and monthly moving averages
+```{r}
+library(forecast)
+ad_data_daily$clicks_weekly_MA <-  ma(ad_data_daily$clicks, order=7)
+ad_data_daily$clicks_monthly_MA <- ma(ad_data_daily$clicks, order=30)
+ad_data_daily$conversions_weekly_MA <-  ma(ad_data_daily$conversions, order=7)
+ad_data_daily$conversions_monthly_MA <- ma(ad_data_daily$conversions, order=30)
+
+ggplot() + geom_line(data = ad_data_daily, aes(date, clicks)) + geom_line(data = ad_data_daily, aes(date, clicks_weekly_MA, colour = "Weekly Moving Average")) + geom_line(data = ad_data_daily, aes(date, clicks_monthly_MA, colour = "Monthly Moving Average")) + scale_x_date('month') + theme_bw() + theme(legend.position = "bottom")
+
+ggplot() + geom_line(data = ad_data_daily, aes(date, conversions)) + geom_line(data = ad_data_daily, aes(date, conversions_weekly_MA, colour = "Weekly Moving Average")) + geom_line(data = ad_data_daily, aes(date, conversions_monthly_MA, colour = "Monthly Moving Average")) + scale_x_date('month') + theme_bw() + theme(legend.position = "bottom")
+```
+
+Just as we know that the day of the week might play a significant role in our shopping behaviours, we may also see a characteristic periodicity of the clicks and conversions in our Ad campaign.
+Also, clicks and conversions do not seem to deviate greatly from the mean value throughout the year which should improve the robustness of our inference on this dataset.
+So far so good. Let's try to decompose the signal into the constituents: overall trend (increasing / decreasing?), seasonality (related to the seasons of the year, i.e. holidays), and the weekly cycle (i.e. weekends generate more clicks and conversions).
+While on the topic of weekly cycles, let's test my intuitive hypothesis that weekend (Fri, Sat, Sun) clicks and conversions are higher on average than on weekdays (Mon-Thu). We will use a non-parametric Wilcoxon ran-sum test.
+```{r}
+ad_data_daily$day <- weekdays(ad_data_daily$date)
+# clicks
+wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$clicks, # a weekend subset
+           y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$clicks) # a weekday subset
+# clonversions
+wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$conversions, # a weekend subset
+           y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$conversions) # a weekday subset
+
+lapply(list(mean_clicks_weekends = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$clicks,
+            mean_conversions_weekdays = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$clicks), mean)
+lapply(list(mean_clicks_weekends = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$conversions,
+            mean_conversions_weekdays = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$conversions), mean)
+```
+From the above, we may conclude that the number of clicks is indeed significantly different (however lower!) on the weekends than on the weekdays, while the conversions do not seem to bear a similar strength of signal as the p-value we observed (0.1639) would typically be a base for rejection of our hypothesis. However, in both cases the conversions and cliks were lower on average than on weekdays. One explanation for this finding is that our Ad campaign was competing against a greater number of competing campagins, as we could not afford to bid for the top spots. Let's test this again using the average position metric:
+```{r}
+wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$average_position, # a weekend subset
+           y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$average_position) # a weekday subset
+lapply(list(mean_averagePosition_weekends = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$average_position, 
+            mean_averagePosition_weekdays = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$average_position), mean)
+```
+Ok, I give up explaining this for the time being. My hypothesis was rejected again (p-vapue = 0.7472).
+
+Let's now actually decompose the signal in the given data using an Autoregressive Integrated Moving Average model (ARIMA), a widely used tool for time series analysis and modelling.
+```{r}
+require(forecast) # forecast uses ARIMA
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
