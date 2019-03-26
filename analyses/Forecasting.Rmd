@@ -86,11 +86,43 @@ lapply(list(mean_averagePosition_weekends = subset(ad_data_daily, day %in% c("Fr
 My hypothesis was rejected again (p-value = 0.7472) so as a novice in marketing field, my intuition seems to fail me. Perhaps some parameters of the Ad campaign were set-up this way.
 
 Let's now actually decompose the signal in the given data using an Autoregressive Integrated Moving Average model (ARIMA), a widely used tool for time series analysis and modelling.
-```{r}
-library(forecast) # forecast library uses ARIMA
 
+First, we can start off by excluding the seasonality (based off the 30-day MA) in our data to evaluate the trend and residual signal.
+```{r}
+plot(na.omit(ad_data_daily$clicks_weekly_MA))
+plot(na.omit(ad_data_daily$clicks_monthly_MA))
+plot(na.omit(ad_data_daily$conversions_weekly_MA))
+plot(na.omit(ad_data_daily$conversions_monthly_MA))
+```
+From the plots above, we can clearly see the seasonality for clicks and conversions, especially when looking at the monthly moving averages. We should account for that in our prognostication model.
+Let's now use 
+```{r}
+plot(stl(ts(na.omit(ad_data_daily$clicks_weekly_MA), frequency = 365/4), s.window="periodic")) # assuming 4 seasons
 ```
 
+```{r}
+plot(tbats(ad_data_daily$clicks, use.trend = TRUE, seasonal.periods = 120)) # assuming 4-month periodicity
+```
+```{r}
+plot(tbats(ad_data_daily$conversions, use.trend = TRUE, seasonal.periods = 120)) # assuming 4-month periodicity
+```
+
+
+```{r}
+library(forecast) # forecast library implements ARIMA
+fit_clicks <- auto.arima(ad_data_daily$clicks, seasonal=TRUE, lambda = 0) # lambda to bound the model on 0 clicks for the lower limit
+summary(fit_clicks)
+plot(forecast(fit_clicks, h=14), include=50, xlab = "days", ylab = "clicks") # include 50 last days before displaying our predictions for the following 14 consequitive days
+summary(forecast(fit_clicks, h=14))
+```
+```{r}
+fit_conversions <- auto.arima(ad_data_daily$conversions, seasonal=TRUE, lambda = 0) 
+```
+Attempting this task, we could not identify a suitable ARIMA model that captures the seasonality of conversions and subsequently models them in time. This is not surprising, as the number of conversions is typically very low (median = 0, mode = 1). This could be addressed by modelling the probability / expected number of conversions given the clicks that we see / predict.
+In order to do so, we could fite a binomial model where the number of trials is the number of clicks, and the number of conversions is the number of successes.
+
+deseasoned_clicks <- seasadj(stl(na.omit(ts(ad_data_daily$clicks, frequency=7)), s.window="periodic"))
+plot(deseasoned_clicks)
 
 ```{r}
 sessionInfo()
