@@ -20,12 +20,18 @@ summary(ad_data_daily)
 ```
 In the given dataset, we are dealing with 2 years worth of daily aggregates of impressions (views), clicks (engagements), and final purchases (conversions). Each day is further characterized using the cost of running the Ad campaign on that day, with information about the total added value from the conversions. Finally, we are informed about the average position of our Ad in the ranking of competing Ads.
 
+As we are interested in the rate of conversions, let's see what is the performance of our campaign:
+```{r}
+sum(ad_data_daily$clicks) / sum(ad_data_daily$conversions)
+sum(ad_data_daily$conversions) / sum(ad_data_daily$clicks)
+```
+So for every 60 clicks, we expect 1 conversion, or, alterantively, this means that a probability of conversion given a single click is about 0.0166.
+
 Let's now inspect the correlation structure in our data for any obvious patterns that will inform our further modelling:
 ```{r}
 correlations <- round(cor(ad_data_daily[,-1], method="spearman"), 2) # use Spearman's rank correlation
 
-
-# rank correlations
+# reorder variables in the correlations matrix to reflect the clustering according to the auto-correlation
 reorder.cormat <- function(matrix){ 
   dd <- as.dist((1-matrix)/2) # Use correlation between variables as distance
   hc <- hclust(dd)
@@ -116,7 +122,7 @@ fit_clicks <- auto.arima(ad_data_daily$clicks, seasonal=TRUE, lambda = 0) # lamb
 summary(forecast(fit_clicks, h=7))
 plot(forecast(fit_clicks, h=7), include=50, xlab = "days", ylab = "clicks") # include 50 last days before displaying our predictions for the following 14 consequitive days
 ```
-The model for clicks appears credible, producing click counts in the ballpark of the previous days and weeks.
+The model for clicks appears credible, producing click counts in the ballpark of the previous days and weeks. Let's try fitting a similar model for conversions:
 ```{r}
 fit_conversions <- auto.arima(ad_data_daily$conversions, seasonal=TRUE, lambda = 0) 
 ```
@@ -124,7 +130,6 @@ Attempting this task, we could not identify a suitable ARIMA model that captures
 This could be addressed by modelling the probability / expected number of conversions given the clicks that we see / predict, in aggregate - regardless of the time series.
 In order to do so, we could fit a Poisson model that considers the number of conversions conditional on the success rate (clicks that produce revenue). For that, a linear regression model with Poisson link function could be quickly fit as follows:
 ```{r}
-ad_data_daily$success_rate <- ad_data_daily$conversions / ad_data_daily$clicks
 poisson_conversions <- glm(conversions ~ clicks, data = ad_data_daily, family="poisson")
 summary(poisson_conversions)
 ```
@@ -132,6 +137,7 @@ It's not a great model, but the correlation of clicks and conversions is not goo
 Now that we have a predictive model for conversions given the clicks, we may begin predicting the conversion rates for the next 14 days of our campaign, given the point forecasts of clicks:
 ```{r}
 conversions_predicted <- predict(poisson_conversions, newdata = data.frame(clicks = forecast(fit_clicks, h=7)$mean), type="response") # predicts the probability of a response
+ad_data_daily$success_rate <- ad_data_daily$conversions / ad_data_daily$clicks # the daily success rate
 scaling_coefficient <- mean(ad_data_daily$success_rate) / mean(predict(poisson_conversions, newdata = data.frame(clicks = ad_data_daily$clicks), type="response")) # calculate the probability scaling coefficient to account for the model not predicting the mean success rate across the dataset
 conversions_predicted <- conversions_predicted * scaling_coefficient
 conversions_predicted
@@ -159,7 +165,7 @@ The model looks quite decent, judging its predictions by the deviation from the 
 Calculating the r-squared between the moving average and our model:
 ```{r}
 library(tidyr)
-last_100_days <- spread(data = plotter, key = type, value = success_rate)[1:100,] # generate the wide data format for convenient vector calculations
+last_100_days <- spread(data = plotter, key = type, value = success_rate)[1:100,] # generate the wide data format from my plotter data frame for convenient vector calculations
 rsq <- function (x, y) cor(x, y) ^ 2 # r-squared function
 rsq(last_100_days[1:85, "30-day moving average"], last_100_days[1:85, "predicted"])
 rsq(last_100_days[, "observed"], last_100_days[, "predicted"])
@@ -167,19 +173,21 @@ rsq(last_100_days[, "observed"], last_100_days[, "predicted"])
 So the r-squared between the predictions and the 85 last days for which we could determine the 30-day moving average is not that bad after all. As the observed conversions are quite rare, we did not expect decent r-squared with our predictions.
 
 Perhaps a simpler model using just the simple moving average would do the job just fine?
+Let's find the best moving average given the data:
 ```{r}
-require(smooth)
+library(smooth)
 sma <- sma(ad_data_daily$success_rate, h=365/4)
 sma
 ```
-
+Our daily success rates are best described when using a daily moving average with a period of 147 days.
+Let's see how well this model predicts the last 100 days
 ```{r}
 rsq(ad_data_daily$success_rate[632:731], forecast(sma, h=731)$mean[632:731])
 ```
 ```{r}
 rsq(last_100_days[, "predicted"], forecast(sma, h=731)$mean[632:731])
 ```
-
+So in the end, 
 ```{r}
 sessionInfo()
 ```
