@@ -8,7 +8,6 @@
 # Ignore data and input
 *.txt
 *.tar.gz
-*.csv
 
 # HTML files
 # You might want to version control html files written in hand
