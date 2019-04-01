@@ -189,7 +189,7 @@ So it is actually underpredicting on the entire set, as there are 196 conversion
 sum(ad_data_weekly$conversions)
 ad_data_weekly$conversions
 ```
-However, the conversions seem to be clustered in the middle of the dataset with multiple high-count observations so the model must have weighted the count evidence like that.
+However, the conversions seem to be clustered in the middle of the dataset with multiple high-count observations so the model must have weighted the count evidence like that. We could model that with Gamma-Poisson or Negative Binomial model in future iterations of the model.
 Now that we have a predictive model for conversions given the clicks, we may begin predicting the conversion rate (success rate, i.e. how many conversions each click generated) for the next 7 days of our campaign, given the point forecasts of clicks:
 ```{r}
 conversion_predicted <- predict(poisson_conversions_weekly, newdata = data.frame(clicks = sum(forecast(fit_clicks, h=7)$mean)))
@@ -287,6 +287,8 @@ It's a model with a single moving average component, without any auto-regression
 ### Summary
 In the end, my proposed solution is to use a collection of staged models in a hierarchy which includes 1) the ARIMA model with 5 auto-regression terms and 1 moving average term that considers and predicts the time-series of clicks 2) the weekly Poisson model which considers the conversions given the clicks, and in our use case, predicts conversions given the predicted daily clicks from ARIMA.
 The predictive performance of this model is not great, but without knowing more  about the AD campaign (for instance - which keywords were popular on the day with conversions?), I doubt we could achieve much more given the available data. One limiting factor is that the campaign is not big enough to run daily or hourly inference for complicated models. Once we gather more details about the campaign, we could move to using multivariate models (such as ARMA-GARCH imlemented in 'rugarch' library). Perhaps simple models should be prefered for the sake of  pragmatism. On the other hand if minimizing the RMSE is most important (which rarely is), then a simple 147-day moving average model on the conversion rate would be useful for that.
+
+NB The author of this report never dealt with forecasting models before and marketing time series data. He found it fun and interesting to work with.
 ```{r}
 sessionInfo()
 ```
