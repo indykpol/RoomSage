@@ -173,34 +173,34 @@ ad_data_weekly$clicks <- rbind(summarise(group_by(.data = ad_data_daily[1:365,],
 poisson_conversions_weekly <- glm(conversions ~ clicks, data = ad_data_weekly, family="poisson")
 summary(poisson_conversions_weekly)
 ```
-This model will predict a conversion when at least 74 clicks are achieved in a given week.
+This model will predict some chance of conversion when at least 74 clicks are achieved in a given week.
 ```{r}
 abs(1 / (poisson_conversions_weekly$coefficients[2] / poisson_conversions_weekly$coefficients[1]))
 ```
 ```{r}
 summary(ad_data_weekly$clicks > 74)
 ```
-So the model will predict a conversion for 91 weeks, and no conversion in 15 weeks of our data. Let's see how many conversions it predicts for the entire weekly set at hand:
+So the model will predict a chance of conversion for 91 weeks, and no such chance in 15 weeks of our data. Let's see how many conversions it predicts for the entire weekly set at hand:
 ```{r}
-sum(predict(poisson_conversions_weekly, newdata = data.frame(clicks = ad_data_weekly$clicks)))
+preds <- predict(poisson_conversions_weekly, newdata = data.frame(clicks = ad_data_weekly$clicks))
+sum(preds[preds >= 0]) # replace negative lambda with 0
 ```
-So it is actually underpredicting on the entire set, as there are 196 conversions in total.
+So the ML model is actually underpredicting on the entire set, as there are 196 conversions in total.
 ```{r}
 sum(ad_data_weekly$conversions)
 ad_data_weekly$conversions
 ```
-However, the conversions seem to be clustered in the middle of the dataset with multiple high-count observations so the model must have weighted the count evidence like that. We could model that with Gamma-Poisson or Negative Binomial model in future iterations of the model.
+However, the conversions seem to be clustered in the middle of the dataset with multiple high-count observations so the model must have weighted the count evidence like that. We could model that with Gamma-Poisson or Negative Binomial model in future iterations of the model. Let's stick to the basic model for now.
 Now that we have a predictive model for conversions given the clicks, we may begin predicting the conversion rate (success rate, i.e. how many conversions each click generated) for the next 7 days of our campaign, given the point forecasts of clicks:
 ```{r}
 conversion_predicted <- predict(poisson_conversions_weekly, newdata = data.frame(clicks = sum(forecast(fit_clicks, h=7)$mean)))
 ad_data_daily$success_rate <- ad_data_daily$conversions / ad_data_daily$clicks # the daily success rate
 conversion_predicted
 ```
-Our model actually predicts no conversions in the following week.
+As the predicted lambda is less than 0, our model actually predicts no conversions in the following week.
 ```{r}
 conversion_predicted <- 0
 ```
-
 ```{r}
 conversions_predicted <- (forecast(fit_clicks, h=7)$mean / sum((forecast(fit_clicks, h=7)$mean))) * conversion_predicted # assignment of predicted conversions during following days
 conversions_predicted
@@ -229,13 +229,13 @@ data.frame(date = ad_data_daily$date, success_rate = ma(ad_data_daily$success_ra
 data.frame(date = ad_data_daily$date, success_rate = predict.dailyWithWeeklyModel(weekly_model = poisson_conversions_weekly, daily_data = ad_data_daily$clicks), type = rep("predicted", nrow(ad_data_daily)))[500:731,]) # adding the predictions on observed days
 ggplot(plotter, aes(x=date, y=success_rate, colour=type)) + geom_line() + theme_bw() + theme(legend.position = "bottom")
 ```
-The model predictions look decent, although the model likely overpredicted conversions in the last 100 days of the timeframe. The prognosis is 0, as few clicks are predicted in the following week.
-Calculating the r-squared between the moving average and our model:
+The model predictions look decent, although the model likely overpredicted conversions in the last 100 days of the timeframe. The prognosis is 0, as very few clicks are predicted in the following week.
+Calculating the Root Mean Squared Error (RMSE) between the moving average and our model:
 ```{r}
 library(tidyr)
 last_100_days <- tidyr::spread(data = plotter, key = type, value = success_rate)[118:217,] # generate the wide data format from my plotter data frame for convenient vector calculations
 
-library(modelr)
+library(Metrics)
 rmse(unlist(last_100_days[, "predicted"]), unlist(last_100_days[, "30-day moving average"]))
 rmse(unlist(last_100_days[, "predicted"]), unlist(last_100_days[, "observed"]))
 ```
@@ -251,7 +251,7 @@ sma
 Our daily success rates are best described when using a daily moving average with a period of 147 days.
 Let's see how well this model predicts the last 100 days
 ```{r}
-require(modelr)
+require(Metrics)
 rmse(forecast(sma, h=731)$mean[617:716], unlist(last_100_days[, "30-day moving average"]))
 rmse(forecast(sma, h=731)$mean[617:716], unlist(last_100_days[, "observed"]))
 ```
