@@ -3,7 +3,6 @@ title: "Forecasting clicks & conversions from Google AdWords data"
 output: html_notebook
 ---
 
-
 Let's import the Google Adwords data for inspection:
 ```{r}
 library(readr)
@@ -18,7 +17,7 @@ Let's summarize our data to get the feel of it:
 ```{r}
 summary(ad_data_daily)
 ```
-In the given dataset, we are dealing with 2 years worth of daily aggregates of impressions (views), clicks (engagements), and final purchases (conversions). Each day is further characterized using the cost of running the Ad campaign on that day, with information about the total added value from the conversions. Finally, we are informed about the average position of our Ad in the ranking of competing Ads.
+In the given dataset, we are dealing with 2 years worth of daily aggregates of impressions (views), clicks (engagements), and final purchases (conversions). Each day is further characterized using the cost of running the Ad campaign on that day, with information about the total added value from the conversions. Finally, we are informed about the average position of our Ad in the ranking of competing Ads. This is a typical format provided by Google as outlined in https://support.google.com/google-ads/answer/6270625?co=ADWORDS.IsAWNCustomer%3Dfalse&hl=en.
 
 As we are interested in the rate of conversions, let's see what is the performance of our campaign:
 ```{r}
@@ -41,20 +40,33 @@ correlations <- reorder.cormat(correlations)
 # Generate the tall format for ggplotting of the lower triangle of the correlation matrix:
 library(reshape2)
 correlations[lower.tri(correlations)] <- NA
-correlations <- melt(correlations, na.rm = TRUE) # remove the NAs to avoid the upper triangle
+correlations <- subset(melt(correlations, na.rm = TRUE), Var1 != Var2) # transform into the tall format, removing the NAs to avoid the upper triangle, also removing the self-pairings to improve the readability
 # Heatmap
 library(ggplot2)
 ggplot(data = correlations, aes(Var2, Var1, fill = value)) + geom_tile(color = "white") + scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", name="Spearman's\nCorrelation") + theme_bw() + theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1)) + coord_fixed() + xlab("") + ylab("") + geom_text(aes(Var2, Var1, label = value), color = "black", size = 2.5) + theme(axis.title.x = element_blank(), axis.title.y = element_blank(), panel.grid.major = element_blank(), panel.border = element_blank(), panel.background = element_blank(), axis.ticks = element_blank())
-
 ```
-From the plot above, we can see that the price & reservations, as well as conversions and the total value of conversions cluster together as they are highly correlated within their pairs. Therefore, it would be safest to exclude one variable from each pair to avoid problems with fitting potential models (highly autocorrelated variables) and to improve the model sensibility. As the price and reservations are not fully autocorrelated (0.92 Spearman's rho), some independent signal might be extracted by including both variables.
-Also, we notice that clicks and conversions are far from being well correlated (0.17 Spearman's rho), which means the campaign is far from determination by mere number of views.
-Color cells by P-value
+From the plot above, we can see that the price & reservations, as well as conversions and the total value of conversions cluster together as they are highly correlated within their pairs. Therefore, it would be safest to exclude one variable from each pair to avoid problems with fitting potential models (highly autocorrelated variables) and to improve the model sensibility. As the price and reservations are not fully autocorrelated (0.92 Spearman's rho), some independent signal might be extracted by including both variables. However, upon a more careful consideration, these variables are not causally related to the clicks and conversions and hence should not be considered in the model (spurious relationship).
+Also, we notice that clicks and conversions are far from being well correlated (0.17 Spearman's rho), which means the campaign is not determinated by mere number of views, other factors must play some role in it.
+Let's plot the timeseries of the different variables side by side:
+```{r}
+require(ggplot2)
+require(reshape2)
+ad_data_daily_tall <- melt(ad_data_daily, id.vars = "date")
+ggplot(ad_data_daily_tall, aes(x=date, y=value, colour=variable)) + geom_line() + facet_wrap(~ variable, scales="free_y", ncol=1, strip.position = "right") + theme_bw() + theme(strip.background = element_blank(), strip.text.y  = element_text(size = 6, angle = 0), legend.position = "none")
+```
+It's a lot of data to glance through, let's focus on a smaller time period:
+```{r}
+require(ggplot2)
+require(reshape2)
+ad_data_daily_tall <- melt(subset(ad_data_daily, date >= "2016-03-01" & date <= "2016-03-31"), id.vars = "date") # subetting March of 2016
+ggplot(ad_data_daily_tall, aes(x=date, y=value, colour=variable)) + geom_line() + facet_wrap(~ variable, scales="free_y", ncol=1, strip.position = "right") + theme_bw() + theme(strip.background = element_blank(), strip.text.y  = element_text(size = 6, angle = 0), legend.position = "none")
+```
+We can see that the number of conversions does not greatly depend on the number of clicks in general, so considering weekly conversion rate is more realistic given the magnitude of the campaign.
 
 Let's now examine the periodicity of the target variables, and throw in some familiar indicators such as the weekly and monthly moving averages
 ```{r}
 library(forecast)
-library(ggplot2)
+require(ggplot2)
 ad_data_daily$clicks_weekly_MA <-  ma(ad_data_daily$clicks, order=7)
 ad_data_daily$clicks_monthly_MA <- ma(ad_data_daily$clicks, order=30)
 ad_data_daily$conversions_weekly_MA <-  ma(ad_data_daily$conversions, order=7)
@@ -83,7 +95,7 @@ lapply(list(mean_clicks_weekends = subset(ad_data_daily, day %in% c("Friday", "S
 lapply(list(mean_clicks_weekends = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$conversions,
             mean_conversions_weekdays = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$conversions), mean)
 ```
-From the above, we may conclude that the number of clicks is significantly different (however lower!) between the weekends than on the weekdays, while the conversions do not seem to bear a similar strength of signal as the p-value we observed (0.1639) would typically be a base for rejection of our hypothesis. However, in both cases the conversions and cliks were lower on average on the weekend than on weekdays. One explanation for this finding is that our Ad campaign was competing against a greater number of competing campagins, as we could not afford to bid for the top spots. Let's test this again using the average position metric:
+From the above, we may conclude that the number of clicks is significantly different (however lower!) between the weekends and the weekdays, while the conversions do not seem to bear a similar strength of signal as the p-value we observed (0.1639) would typically be a base for rejection of our hypothesis. However, in both cases the conversions and cliks were lower on average on the weekend than on weekdays. One explanation for this finding is that our Ad campaign was competing against a greater number of competing campagins, as we could not afford to bid for the top spots. Let's test this again using the average position metric:
 ```{r}
 wilcox.test(x = subset(ad_data_daily, day %in% c("Friday", "Saturday", "Sunday"))$average_position, # a weekend subset
            y = subset(ad_data_daily, !day %in% c("Friday", "Saturday", "Sunday"))$average_position) # a weekday subset
@@ -101,94 +113,180 @@ plot(na.omit(ad_data_daily$clicks_monthly_MA))
 plot(na.omit(ad_data_daily$conversions_weekly_MA))
 plot(na.omit(ad_data_daily$conversions_monthly_MA))
 ```
-From the plots above, we can clearly see the seasonality for clicks and conversions, especially when looking at the monthly moving averages. We should account for that in our prognostication model.
-Let's now use 
+From the plots above, we can see some seasonality for clicks and conversions, especially when looking at the monthly moving averages. We could account for that in our prognostication model.
+Let's now use the seasonal and trend decomposition using loess:
 ```{r}
-plot(stl(ts(na.omit(ad_data_daily$clicks_weekly_MA), frequency = 365/4), s.window="periodic")) # assuming 4 seasons, let's decompose the weekly-smoothed time series into seasonal, trend and irregular components using loess (STL function)
+plot(stl(ts(na.omit(ad_data_daily$clicks), frequency = 365/4), s.window="periodic")) # assuming 4 seasons, let's decompose the time series into seasonal, trend and irregular components using loess (STL function)
 ```
 ```{r}
-plot(stl(ts(na.omit(ad_data_daily$conversions_weekly_MA), frequency = 365/4), s.window="periodic")) # assuming 4 seasons, let's decompose the weekly-smoothed time series into seasonal, trend and irregular components using loess (STL function)
+plot(stl(ts(na.omit(ad_data_daily$conversions), frequency = 365/4), s.window="periodic")) # assuming 4 seasons, let's decompose the time series into seasonal, trend and irregular components using loess (STL function)
 ```
 
-Correcting for seasonal and trend effects, there is still residual effect which we should be able to model. Worth noting at this point is that the conversions data is comparatively ill-behaved in terms of the trend and seasonality, however. We have seen in the past plots that conversions are rare indeed.
+Correcting for seasonal and trend effects, there is still residual effect which in a simple model must be included as unattributed variance. Worth noting at this point is that the conversions data is comparatively ill-behaved in terms of the trend and seasonality, however. We have seen in the past plots that conversions are rare indeed.
 ```{r}
 summary(factor(ad_data_daily$conversions))
 ```
 
-
+Let's now fit the ARIMA model automatically, which internally will run a search over possible models and will select the one that minimizes the Akaike Information Criterion (AIC).
 ```{r}
 library(forecast) # forecast library implements ARIMA
-fit_clicks <- auto.arima(ad_data_daily$clicks, seasonal=TRUE, lambda = 0) # lambda to bound the model on 0 clicks for the lower limit
+fit_clicks <- auto.arima(ad_data_daily$clicks, seasonal=TRUE, lambda = 0, ic = "aic") # lambda to bound the model on 0 clicks for the lower limit
 summary(forecast(fit_clicks, h=7))
+```
+This model contains five auto-regressive components (considers max 5 past days for current prediction) and one moving average component (considers single past day), as specified by the coefficient names. In this procedure, only a single moving average component was selected, so a seasonal component was not strong enough to be included in the end model.
+```{r}
 plot(forecast(fit_clicks, h=7), include=50, xlab = "days", ylab = "clicks") # include 50 last days before displaying our predictions for the following 14 consequitive days
 ```
-The model for clicks appears credible, producing click counts in the ballpark of the previous days and weeks. Let's try fitting a similar model for conversions:
+
+The model for clicks appears credible, producing click counts in the ballpark of the previous days and weeks, and their moving averages. Let's try fitting a similar model for conversions:
 ```{r}
 fit_conversions <- auto.arima(ad_data_daily$conversions, seasonal=TRUE, lambda = 0) 
 ```
-Attempting this task, we could not identify a suitable ARIMA model that captures the seasonality of conversions and subsequently models them in time. This is not surprising, as the number of conversions is typically very low (median = 0, mean = 0.2709, mode on successful days = 1). This also means that the time series is not very informative in terms of predicting the conversions.
-This could be addressed by modelling the probability / expected number of conversions given the clicks that we see / predict, in aggregate - regardless of the time series.
+Attempting this task, we could not identify a suitable ARIMA model that captures the seasonality of conversions and subsequently models them in time. This is not surprising, as the number of conversions is typically very low (median = 0, mean = 0.2709, mode on successful days = 1). This also means that the time series overal is not very informative in terms of predicting the conversions. Hence we could focus on higher time frames for this type of data.
+It could also be addressed by modelling the probability / expected number of conversions given the clicks that we see / predict, in aggregate - regardless of the time series.
 In order to do so, we could fit a Poisson model that considers the number of conversions conditional on the success rate (clicks that produce revenue). For that, a linear regression model with Poisson link function could be quickly fit as follows:
 ```{r}
 poisson_conversions <- glm(conversions ~ clicks, data = ad_data_daily, family="poisson")
 summary(poisson_conversions)
 ```
-It's not a great model, but the correlation of clicks and conversions is not good neither (reminder: Spearman's rho = 0.18).
-Now that we have a predictive model for conversions given the clicks, we may begin predicting the conversion rates for the next 14 days of our campaign, given the point forecasts of clicks:
+It's not a great model, but the correlation of clicks and conversions is not good neither (reminder: Spearman's rho = 0.18). Our Poisson model attributes 0.062464 conversion per click, with a negative intercept, so it will take at least 39 clicks (2.4232 / 0.062464 = 38.79) before our model will predict any conversion.
 ```{r}
-conversions_predicted <- predict(poisson_conversions, newdata = data.frame(clicks = forecast(fit_clicks, h=7)$mean), type="response") # predicts the probability of a response
+abs(1 / (poisson_conversions$coefficients[2] / poisson_conversions$coefficients[1]))
+```
+This number is quite high, as our campaign rarely achieves more than 38 clicks per day:
+```{r}
+summary(ad_data_daily$clicks > 38)
+```
+So the model is not very useful in our case. We should focus on predicting the weekly number of conversions instead.
+First, generate weekly aggregates:
+```{r}
+library(tidyverse)
+ad_data_weekly <- rbind(summarise(group_by(.data = ad_data_daily[1:365,], week = lubridate::week(date)), value = sum(conversions)), # first year's weeks
+                                summarise(group_by(.data = ad_data_daily[366:731,], week = lubridate::week(date)), value = sum(conversions))) # second year's weeks
+colnames(ad_data_weekly)[2] <- "conversions"
+ad_data_weekly[54:106, "week"] <- ad_data_weekly[54:106, "week"] + 53 # making week IDs unique
+ad_data_weekly$clicks <- rbind(summarise(group_by(.data = ad_data_daily[1:365,], week = lubridate::week(date)), value = sum(clicks)), # first year's weeks
+                                summarise(group_by(.data = ad_data_daily[366:731,], week = lubridate::week(date)), value = sum(clicks)))$value
+```
+
+```{r}
+poisson_conversions_weekly <- glm(conversions ~ clicks, data = ad_data_weekly, family="poisson")
+summary(poisson_conversions_weekly)
+```
+This model will predict a conversion when at least 74 clicks are achieved in a given week.
+```{r}
+abs(1 / (poisson_conversions_weekly$coefficients[2] / poisson_conversions_weekly$coefficients[1]))
+```
+```{r}
+summary(ad_data_weekly$clicks > 74)
+```
+So the model will predict a conversion for 91 weeks, and no conversion in 15 weeks of our data. Let's see how many conversions it predicts for the entire weekly set at hand:
+```{r}
+sum(predict(poisson_conversions_weekly, newdata = data.frame(clicks = ad_data_weekly$clicks)))
+```
+So it is actually underpredicting on the entire set, as there are 196 conversions in total.
+```{r}
+sum(ad_data_weekly$conversions)
+ad_data_weekly$conversions
+```
+However, the conversions seem to be clustered in the middle of the dataset with multiple high-count observations so the model must have weighted the count evidence like that.
+Now that we have a predictive model for conversions given the clicks, we may begin predicting the conversion rate (success rate, i.e. how many conversions each click generated) for the next 7 days of our campaign, given the point forecasts of clicks:
+```{r}
+conversion_predicted <- predict(poisson_conversions_weekly, newdata = data.frame(clicks = sum(forecast(fit_clicks, h=7)$mean)))
 ad_data_daily$success_rate <- ad_data_daily$conversions / ad_data_daily$clicks # the daily success rate
-scaling_coefficient <- mean(ad_data_daily$success_rate) / mean(predict(poisson_conversions, newdata = data.frame(clicks = ad_data_daily$clicks), type="response")) # calculate the probability scaling coefficient to account for the model not predicting the mean success rate across the dataset
-conversions_predicted <- conversions_predicted * scaling_coefficient
+conversion_predicted
+```
+Our model actually predicts no conversions in the following week.
+```{r}
+conversion_predicted <- 0
+```
+
+```{r}
+conversions_predicted <- (forecast(fit_clicks, h=7)$mean / sum((forecast(fit_clicks, h=7)$mean))) * conversion_predicted # assignment of predicted conversions during following days
 conversions_predicted
 ```
-Let's now see how many conversions we should expect given these probabilities.
+Let's write a function that automates the prediction using the weekly model before we display the predictions in a broader context:
 ```{r}
-mean(sapply(1:10000, FUN = function(x) sum(rpois(n=7, lambda = conversions_predicted)))) # sampling 7 random deviates given the predicted probabilities of a response 10000 times, and observing the average
+predict.dailyWithWeeklyModel <- function(weekly_model, daily_data) {
+	ids <- seq(1, length(daily_data), by = 7) # generate week indices
+	weekly_data <- sapply(1:length(ids), FUN = function(x) sum(daily_data[ids[x] : (ids[x]+6)], na.rm = TRUE)) # summarize data by weeks
+	predicted_conversion <- predict(weekly_model, newdata = data.frame(clicks = weekly_data)) # predict using the weekly model on the weekly data
+	predicted_conversion[predicted_conversion < 0] <- 0 # identify 0-conversion predictions
+	predicted_conversions_daily <- sapply(1:length(ids), FUN = function(x) { # convert weekly predictions into daily ML assignments
+		t(predicted_conversion[x] * (daily_data[ids[x] : (ids[x]+6)] / sum(daily_data[ids[x] : (ids[x]+6)], na.rm = TRUE)))
+	})
+	as.vector(predicted_conversions_daily)[1:length(daily_data)]
+}
 ```
-Which not surprisingly corresponds to the sum of predicted probabilities:
+Let's now plot the conversion rates and our predictions for the last 231 days of the time series:
 ```{r}
-sum(conversions_predicted)
-```
-Let's now plot the conversion rates and our predictions:
-```{r}
-plotter <- ad_data_daily[632:731, c("date", "success_rate")]
+plotter <- ad_data_daily[500:731, c("date", "success_rate")] # last 100 days
 plotter$type <- "observed"
 
 plotter <- rbind(plotter, data.frame(date = ad_data_daily[725:731, "date"] + 7:13, 
 success_rate = conversions_predicted, type = rep("prognosticated", 7)), # generating next 7 days
-data.frame(date = ad_data_daily$date, success_rate = ma(ad_data_daily$success_rate, order = 30), type = rep("30-day moving average", nrow(ad_data_daily)))[632:731,], # adding the 30-day moving average
-data.frame(date = ad_data_daily$date, success_rate = predict(poisson_conversions, newdata = data.frame(clicks = ad_data_daily$clicks), type="response") * scaling_coefficient, type = rep("predicted", nrow(ad_data_daily)))[632:731,]) # adding the predictions on observed days
-ggplot(plotter, aes(x=date, y=log10(success_rate), colour=type)) + geom_line() + theme_bw() + theme(legend.position = "bottom")
+data.frame(date = ad_data_daily$date, success_rate = ma(ad_data_daily$success_rate, order = 30), type = rep("30-day moving average", nrow(ad_data_daily)))[500:731,], # adding the 30-day moving average
+data.frame(date = ad_data_daily$date, success_rate = predict.dailyWithWeeklyModel(weekly_model = poisson_conversions_weekly, daily_data = ad_data_daily$clicks), type = rep("predicted", nrow(ad_data_daily)))[500:731,]) # adding the predictions on observed days
+ggplot(plotter, aes(x=date, y=success_rate, colour=type)) + geom_line() + theme_bw() + theme(legend.position = "bottom")
 ```
-The model looks quite decent, judging its predictions by the deviation from the trend and by continuity with the prognosis.
+The model predictions look decent, although the model likely overpredicted conversions in the last 100 days of the timeframe. The prognosis is 0, as few clicks are predicted in the following week.
 Calculating the r-squared between the moving average and our model:
 ```{r}
 library(tidyr)
-last_100_days <- spread(data = plotter, key = type, value = success_rate)[1:100,] # generate the wide data format from my plotter data frame for convenient vector calculations
-rsq <- function (x, y) cor(x, y) ^ 2 # r-squared function
-rsq(last_100_days[1:85, "30-day moving average"], last_100_days[1:85, "predicted"])
-rsq(last_100_days[, "observed"], last_100_days[, "predicted"])
-```
-So the r-squared between the predictions and the 85 last days for which we could determine the 30-day moving average is not that bad after all. As the observed conversions are quite rare, we did not expect decent r-squared with our predictions.
+last_100_days <- tidyr::spread(data = plotter, key = type, value = success_rate)[118:217,] # generate the wide data format from my plotter data frame for convenient vector calculations
 
-Perhaps a simpler model using just the simple moving average would do the job just fine?
-Let's find the best moving average given the data:
+library(modelr)
+rmse(unlist(last_100_days[, "predicted"]), unlist(last_100_days[, "30-day moving average"]))
+rmse(unlist(last_100_days[, "predicted"]), unlist(last_100_days[, "observed"]))
+```
+The root mean squared eror between the predictions and the 100 last days for which we could determine the 30-day moving average is lower than for the observed conversions. The observed conversions are very sparse so the RMSE is higher.
+
+Perhaps a simpler model using the simple moving average would do the job just fine?
+Let's find the best moving average given the data (minimizing the Akaike Information Criterion):
 ```{r}
 library(smooth)
-sma <- sma(ad_data_daily$success_rate, h=365/4)
+sma <- sma(ad_data_daily$success_rate, h=365/4, ic = "AIC")
 sma
 ```
 Our daily success rates are best described when using a daily moving average with a period of 147 days.
 Let's see how well this model predicts the last 100 days
 ```{r}
-rsq(ad_data_daily$success_rate[632:731], forecast(sma, h=731)$mean[632:731])
+require(modelr)
+rmse(forecast(sma, h=731)$mean[617:716], unlist(last_100_days[, "30-day moving average"]))
+rmse(forecast(sma, h=731)$mean[617:716], unlist(last_100_days[, "observed"]))
 ```
+Not surprisingly, the moving average derived with a window of 147 days well fits the moving average with a window of 30 days (judging by very low RMSE), and appears better that our ARIMA with a weekly Poisson model for conversions (0.02965679 < 0.09292762).
 ```{r}
-rsq(last_100_days[, "predicted"], forecast(sma, h=731)$mean[632:731])
+plotter <- rbind(data.frame(date = ad_data_daily[725:731, "date"] + 7:13, 
+success_rate = as.numeric(conversions_predicted), type = rep("prognosticated", 7)), # generating next 7 days
+data.frame(date = ad_data_daily$date, success_rate = ma(ad_data_daily$success_rate, order = 30), type = rep("30-day moving average", nrow(ad_data_daily)))[500:731,], # adding the 30-day moving average
+data.frame(date = ad_data_daily$date, success_rate = forecast(sma, h=731)$mean, type = rep("147-day moving average", nrow(ad_data_daily)))[500:731,], # adding the 147-day moving average
+data.frame(date = ad_data_daily$date, success_rate = predict.dailyWithWeeklyModel(weekly_model = poisson_conversions_weekly, daily_data = ad_data_daily$clicks), type = rep("predicted", nrow(ad_data_daily)))[500:731,]) # adding the predictions on observed days
+ggplot(plotter, aes(x=date, y=log10(success_rate), colour=type)) + geom_line() + theme_bw() + theme(legend.position = "bottom")
 ```
-So in the end, 
+A 147 moving average at this timeframe is almost a flat line. While effective (in terms of minimizing RMSE), perhaps it's not the preferred method for predicting, in cases for instance when we begin to obtain more clicks. From that perspective, a model that considers the clicks is prefered. For example, our model would predict 0 conversions in the following week if the clicks remained at a similar level, while the SMA model would keep predicting certain high conversion rate.
+Lastly, I wanted to explore a possibility of modelling the seasonality on a weekly-summarized conversions.
+
+Let's try ARIMA:
+```{r}
+require(forecast)
+fit_conversions_weekly <- auto.arima(ad_data_weekly$conversions, seasonal=TRUE, lambda = 0)
+```
+It's still too sparse to be fit with ARIMA:
+```{r}
+ad_data_weekly$conversions
+```
+Repeating the above with the clicks data:
+```{r}
+require(forecast)
+fit_clicks_weekly <- auto.arima(ad_data_weekly$clicks, seasonal=TRUE, lambda = 0)
+fit_clicks_weekly
+```
+It's a model with a single moving average component, without any auto-regressions. Not an exciting model to work with, again. Having satisfied our curiosity, let's wrap up this exercise.
+
+### Summary
+In the end, my proposed solution is to use a collection of staged models in a hierarchy which includes 1) the ARIMA model with 5 auto-regression terms and 1 moving average term that considers and predicts the time-series of clicks 2) the weekly Poisson model which considers the conversions given the clicks, and in our use case, predicts conversions given the predicted daily clicks from ARIMA.
+The predictive performance of this model is not great, but without knowing more  about the AD campaign (for instance - which keywords were popular on the day with conversions?), I doubt we could achieve much more given the available data. One limiting factor is that the campaign is not big enough to run daily or hourly inference for complicated models. Once we gather more details about the campaign, we could move to using multivariate models (such as ARMA-GARCH imlemented in 'rugarch' library). Perhaps simple models should be prefered for the sake of  pragmatism. On the other hand if minimizing the RMSE is most important (which rarely is), then a simple 147-day moving average model on the conversion rate would be useful for that.
 ```{r}
 sessionInfo()
 ```
-
